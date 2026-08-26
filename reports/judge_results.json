@@ -1,0 +1,122 @@
+{
+  "judge_model": "gpt-4o-mini",
+  "cohen_kappa": 1.0,
+  "human_labels": [
+    1,
+    0,
+    1,
+    1,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0
+  ],
+  "judge_labels": [
+    1,
+    0,
+    1,
+    1,
+    1,
+    0,
+    1,
+    0,
+    1,
+    0
+  ],
+  "agreement_results": [
+    {
+      "question_id": 1,
+      "human_label": 1,
+      "judge_label": 1,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 5,
+      "human_label": 0,
+      "judge_label": 0,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 12,
+      "human_label": 1,
+      "judge_label": 1,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 21,
+      "human_label": 1,
+      "judge_label": 1,
+      "agree": true,
+      "final_winner": "tie",
+      "position_consistent": false
+    },
+    {
+      "question_id": 23,
+      "human_label": 1,
+      "judge_label": 1,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 29,
+      "human_label": 0,
+      "judge_label": 0,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 33,
+      "human_label": 1,
+      "judge_label": 1,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 41,
+      "human_label": 0,
+      "judge_label": 0,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    },
+    {
+      "question_id": 46,
+      "human_label": 1,
+      "judge_label": 1,
+      "agree": true,
+      "final_winner": "tie",
+      "position_consistent": false
+    },
+    {
+      "question_id": 50,
+      "human_label": 0,
+      "judge_label": 0,
+      "agree": true,
+      "final_winner": "B",
+      "position_consistent": true
+    }
+  ],
+  "bias_report": {
+    "total_judged": 5,
+    "position_bias_rate": 0.2,
+    "position_bias_count": 1,
+    "verbosity_bias": 1.0,
+    "verbosity_details": {
+      "a_wins_a_longer": 0,
+      "b_wins_b_longer": 4,
+      "total_decisive": 4
+    },
+    "interpretation": "Low position bias."
+  }
+}

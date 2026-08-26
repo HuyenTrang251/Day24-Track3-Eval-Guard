@@ -110,7 +110,10 @@ def group_by_distribution(test_set: list[dict]) -> dict[str, list[dict]]:
     Returns:
         {"factual": [...], "multi_hop": [...], "adversarial": [...]}
     """
-    # TODO: Implement
+    groups = {"factual": [], "multi_hop": [], "adversarial": []}
+    for item in test_set:
+        groups[item["distribution"]].append(item)
+    return groups
     # groups = {"factual": [], "multi_hop": [], "adversarial": []}
     # for item in test_set:
     #     groups[item["distribution"]].append(item)
@@ -130,7 +133,20 @@ def run_ragas_50q(answers: list[dict]) -> list[RagasResult]:
         3. Kết hợp kết quả với distribution info từ answers list
         4. Return list[RagasResult]
     """
-    # TODO: Implement
+    try:
+        from src.m4_eval import evaluate_ragas
+    except ImportError:
+        return []
+    raw = evaluate_ragas(
+        [a["question"] for a in answers], [a["answer"] for a in answers],
+        [a["contexts"] for a in answers], [a["ground_truth"] for a in answers],
+    )
+    return [RagasResult(
+        question_id=a["id"], distribution=a["distribution"], question=a["question"],
+        answer=a["answer"], contexts=a["contexts"], ground_truth=a["ground_truth"],
+        faithfulness=m.faithfulness, answer_relevancy=m.answer_relevancy,
+        context_precision=m.context_precision, context_recall=m.context_recall,
+    ) for a, m in zip(answers, raw.get("per_question", []))]
     # try:
     #     from src.m4_eval import evaluate_ragas
     # except ImportError:
@@ -166,7 +182,14 @@ def bottom_10(results: list[RagasResult]) -> list[dict]:
           "question": ..., "avg_score": ..., "worst_metric": ...,
           "diagnosis": ..., "suggested_fix": ...}, ...]
     """
-    # TODO: Implement
+    output = []
+    for rank, result in enumerate(sorted(results, key=lambda r: r.avg_score)[:10], 1):
+        diagnosis, suggested_fix = DIAGNOSTIC_TREE[result.worst_metric]
+        output.append({"rank": rank, "question_id": result.question_id,
+            "distribution": result.distribution, "question": result.question,
+            "avg_score": round(result.avg_score, 4), "worst_metric": result.worst_metric,
+            "diagnosis": diagnosis, "suggested_fix": suggested_fix})
+    return output
     # sorted_asc = sorted(results, key=lambda r: r.avg_score)
     # bottom = sorted_asc[:10]
     # output = []
@@ -204,7 +227,17 @@ def cluster_analysis(results: list[RagasResult]) -> dict:
           "insight": "..."
         }
     """
-    # TODO: Implement
+    matrix = {metric: {"factual": 0, "multi_hop": 0, "adversarial": 0}
+              for metric in DIAGNOSTIC_TREE}
+    for result in results:
+        matrix[result.worst_metric][result.distribution] += 1
+    dominant_dist = max(matrix["faithfulness"],
+                        key=lambda d: sum(matrix[m][d] for m in matrix))
+    dominant_metric = max(matrix, key=lambda m: sum(matrix[m].values()))
+    return {"matrix": matrix, "dominant_failure_distribution": dominant_dist,
+            "dominant_failure_metric": dominant_metric,
+            "insight": f"{dominant_dist} is weakest on {dominant_metric}. "
+                       f"Suggested fix: {DIAGNOSTIC_TREE[dominant_metric][1]}"}
     # matrix = {
     #     metric: {"factual": 0, "multi_hop": 0, "adversarial": 0}
     #     for metric in DIAGNOSTIC_TREE

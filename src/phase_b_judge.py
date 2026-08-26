@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config import OPENAI_API_KEY, JUDGE_MODEL, HUMAN_LABELS_PATH
+from config import OPENAI_API_KEY, JUDGE_MODEL, HUMAN_LABELS_PATH, TEST_SET_PATH
 
 
 @dataclass
@@ -39,7 +39,35 @@ def pairwise_judge(question: str, answer_a: str, answer_b: str) -> dict:
     Returns:
         {"winner": "A"|"B"|"tie", "reasoning": str, "scores": {"A": float, "B": float}}
     """
-    # TODO: Implement
+    if not OPENAI_API_KEY:
+        return {"winner": "tie", "reasoning": "OpenAI API key is not configured.",
+                "scores": {"A": 0.0, "B": 0.0}}
+    prompt = f"""Compare two answers to the same HR-policy question. Judge factual
+accuracy, completeness, and conciseness. Return only JSON with winner (A, B, or tie),
+reasoning, and scores containing A and B from 0 to 1.
+
+Question: {question}
+Answer A: {answer_a}
+Answer B: {answer_b}
+"""
+    try:
+        from openai import OpenAI
+        response = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
+            model=JUDGE_MODEL,
+            messages=[{"role": "system", "content": "Return valid JSON only."},
+                      {"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+        parsed = json.loads(response.choices[0].message.content)
+        winner = parsed.get("winner", "tie")
+        scores = parsed.get("scores", {})
+        return {"winner": winner if winner in {"A", "B", "tie"} else "tie",
+                "reasoning": str(parsed.get("reasoning", "")),
+                "scores": {"A": max(0.0, min(1.0, float(scores.get("A", 0)))),
+                           "B": max(0.0, min(1.0, float(scores.get("B", 0))))}}
+    except Exception as error:
+        return {"winner": "tie", "reasoning": f"Judge unavailable: {error}",
+                "scores": {"A": 0.0, "B": 0.0}}
     # PROMPT_TEMPLATE = '''Bạn là một expert đánh giá chất lượng câu trả lời RAG.
     #
     # Câu hỏi: {question}
@@ -85,7 +113,15 @@ def swap_and_average(question: str, answer_a: str, answer_b: str) -> JudgeResult
         Final:   nếu winner_1 == winner_2 → final = winner_1
                  nếu khác nhau → final = "tie"
     """
-    # TODO: Implement
+    pass1 = pairwise_judge(question, answer_a, answer_b)
+    pass2_raw = pairwise_judge(question, answer_b, answer_a)
+    swap_map = {"A": "B", "B": "A", "tie": "tie"}
+    winner_pass2 = swap_map[pass2_raw["winner"]]
+    consistent = pass1["winner"] == winner_pass2
+    return JudgeResult(question, answer_a, answer_b, pass1["winner"], winner_pass2,
+        pass1["winner"] if consistent else "tie", pass1["reasoning"],
+        pass2_raw["reasoning"], consistent, pass1["scores"],
+        {"A": pass2_raw["scores"]["B"], "B": pass2_raw["scores"]["A"]})
     # pass1 = pairwise_judge(question, answer_a, answer_b)
     # pass2_raw = pairwise_judge(question, answer_b, answer_a)  # SWAP!
     #
@@ -143,8 +179,17 @@ def cohen_kappa(judge_labels: list[int], human_labels: list[int]) -> float:
         κ = (p_o - p_e) / (1 - p_e) if p_e != 1 else 0
         return κ
     """
-    # TODO: Implement
-    return 0.0
+    if len(judge_labels) != len(human_labels):
+        raise ValueError("label lengths must match")
+    if not judge_labels:
+        return 0.0
+    n = len(judge_labels)
+    observed = sum(a == b for a, b in zip(judge_labels, human_labels)) / n
+    labels = set(judge_labels) | set(human_labels)
+    expected = sum(judge_labels.count(x) * human_labels.count(x) for x in labels) / n**2
+    if expected == 1:
+        return 1.0 if observed == 1 else 0.0
+    return (observed - expected) / (1 - expected)
 
 
 # ─── Task 8: Bias Report ──────────────────────────────────────────────────────
@@ -172,7 +217,21 @@ def bias_report(judge_results: list[JudgeResult]) -> dict:
           "interpretation": str,
         }
     """
-    # TODO: Implement
+    total = len(judge_results)
+    if not total:
+        return {"total_judged": 0, "position_bias_rate": 0.0,
+                "position_bias_count": 0, "verbosity_bias": 0.0,
+                "verbosity_details": {}, "interpretation": "No results."}
+    position_count = sum(not r.position_consistent for r in judge_results)
+    a_longer = sum(r.final_winner == "A" and len(r.answer_a) > len(r.answer_b) for r in judge_results)
+    b_longer = sum(r.final_winner == "B" and len(r.answer_b) > len(r.answer_a) for r in judge_results)
+    decisive = sum(r.final_winner != "tie" for r in judge_results)
+    verbosity = (a_longer + b_longer) / decisive if decisive else 0.0
+    return {"total_judged": total, "position_bias_rate": position_count / total,
+            "position_bias_count": position_count, "verbosity_bias": verbosity,
+            "verbosity_details": {"a_wins_a_longer": a_longer, "b_wins_b_longer": b_longer,
+                                  "total_decisive": decisive},
+            "interpretation": "Low position bias." if position_count / total <= .3 else "High position bias."}
     # total = len(judge_results)
     # if total == 0:
     #     return {"total_judged": 0, "position_bias_rate": 0.0, "verbosity_bias": 0.0}
@@ -208,7 +267,72 @@ def bias_report(judge_results: list[JudgeResult]) -> dict:
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+def judge_answer_correctness(question: str, answer: str, reference: str) -> int:
+    """Return a binary quality label without rewarding a longer reference answer."""
+    if not OPENAI_API_KEY:
+        return 0
+    prompt = f"""Evaluate whether the candidate answer correctly answers the question.
+Use the reference only for fact checking. A concise answer can still be correct.
+Return JSON only: {{"label": 0 or 1, "reasoning": "brief"}}.
+
+Question: {question}
+Candidate answer: {answer}
+Reference answer: {reference}
+"""
+    from openai import OpenAI
+    response = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
+        model=JUDGE_MODEL,
+        messages=[{"role": "system", "content": "Return valid JSON only."},
+                  {"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
+    return 1 if json.loads(response.choices[0].message.content).get("label") == 1 else 0
+
+
+def measure_human_agreement() -> dict:
+    """Judge the ten human-labelled answers and save reproducible agreement data."""
+    with open(HUMAN_LABELS_PATH, encoding="utf-8") as f:
+        human_data = json.load(f)
+    with open(TEST_SET_PATH, encoding="utf-8") as f:
+        ground_truths = {item["id"]: item["ground_truth"] for item in json.load(f)}
+
+    results = []
+    judge_records = []
+    judge_labels = []
+    human_labels = []
+    for item in human_data:
+        reference = ground_truths[item["question_id"]]
+        judged = swap_and_average(item["question"], item["model_answer"], reference)
+        judge_records.append(judged)
+        judge_label = judge_answer_correctness(item["question"], item["model_answer"], reference)
+        judge_labels.append(judge_label)
+        human_labels.append(item["human_label"])
+        results.append({
+            "question_id": item["question_id"],
+            "human_label": item["human_label"],
+            "judge_label": judge_label,
+            "agree": judge_label == item["human_label"],
+            "final_winner": judged.final_winner,
+            "position_consistent": judged.position_consistent,
+        })
+
+    report = {
+        "judge_model": JUDGE_MODEL,
+        "cohen_kappa": round(cohen_kappa(judge_labels, human_labels), 4),
+        "human_labels": human_labels,
+        "judge_labels": judge_labels,
+        "agreement_results": results,
+        "bias_report": bias_report(judge_records[:5]),
+    }
+    os.makedirs("reports", exist_ok=True)
+    with open("reports/judge_results.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+    return report
+
+
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     # --- Demo pairwise + swap ---
     q   = "Nhân viên được nghỉ bao nhiêu ngày phép năm?"
     a_a = "Nhân viên được nghỉ 15 ngày phép năm theo chính sách v2024 hiện hành."
@@ -235,3 +359,7 @@ if __name__ == "__main__":
     # --- Bias report ---
     bias = bias_report([result])
     print(f"\nBias report: {bias}")
+
+    report = measure_human_agreement()
+    print(f"Measured Cohen kappa: {report['cohen_kappa']:.3f}")
+    print("Phase B report saved -> reports/judge_results.json")
